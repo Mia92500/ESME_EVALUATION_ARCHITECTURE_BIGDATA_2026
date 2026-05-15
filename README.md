@@ -8,17 +8,17 @@
 
 ## Objectif
 
-Ce projet analyse des milliers d'offres d'emploi LinkedIn en utilisant Snowflake pour le stockage et le traitement des données, et Streamlit pour les visualisations interactives.
+Pour ce projet, on a utilisé un dataset LinkedIn contenant des milliers d'offres d'emploi. L'idée c'était de charger ces données dans Snowflake, les nettoyer, puis créer des visualisations avec Streamlit pour analyser le marché de l'emploi.
 
 ---
 
 ## Architecture Medallion
 
-Les données sont organisées en 3 couches :
+On a organisé les données en 3 couches, c'est ce qu'on appelle l'architecture Medallion :
 
-- **Bronze** : ingestion des données brutes depuis le bucket S3, sans transformation
-- **Silver** : nettoyage, typage des colonnes et extraction des données JSON
-- **Gold** : vues agrégées prêtes pour l'analyse
+- **Bronze** : on charge les fichiers tels quels depuis S3, sans rien toucher. C'est la "source de vérité".
+- **Silver** : on nettoie et on type les données correctement (dates, nombres, booléens...).
+- **Gold** : on crée des vues avec les données agrégées, prêtes pour les graphiques.
 
 ---
 
@@ -49,11 +49,16 @@ Les fichiers sont disponibles dans le bucket S3 : `s3://snowflake-lab-bucket/`
 ---
 
 ## Structure du Projet
+
 ---
 
 ## Phase 1 : Couche Bronze
 
-Ingestion des données brutes depuis le bucket S3 sans transformation. Toutes les colonnes sont chargées en STRING pour éviter les erreurs de format.
+La première étape c'était de charger les données brutes depuis le bucket S3 dans Snowflake. On a créé une base de données `LINKEDIN` avec un schéma `BRONZE`, et un stage externe qui pointe vers le bucket S3.
+
+Pour les fichiers CSV (job_postings, benefits, employee_counts, job_skills), on a créé des tables où **toutes les colonnes sont en STRING**. On a fait ce choix pour éviter les erreurs de chargement — si une valeur de date ou de nombre est mal formatée dans le fichier source, Snowflake aurait rejeté la ligne. En mettant tout en STRING, on s'assure de tout charger sans perte.
+
+Pour les fichiers JSON (companies, company_industries, company_specialities, job_industries), on a utilisé le type `VARIANT` qui permet de stocker du JSON brut dans Snowflake.
 
 **Résultat :** 21 993 offres d'emploi chargées avec 0 erreur.
 
@@ -61,52 +66,52 @@ Ingestion des données brutes depuis le bucket S3 sans transformation. Toutes le
 
 ## Phase 2 : Couche Silver
 
-Nettoyage et typage des données :
-- Conversion des colonnes numériques (NUMBER, FLOAT)
-- Conversion des timestamps Unix en TIMESTAMP
-- Gestion des booléens (remote_allowed, sponsored)
-- Extraction des champs depuis les fichiers JSON
+Une fois les données chargées, on a créé la couche Silver pour les nettoyer et les typer correctement. Pour chaque table on a :
 
-**Problème rencontré :** Les colonnes `remote_allowed` et `sponsored` contenaient des valeurs `1.0`/`0.0` au lieu de booléens → résolu avec `CASE WHEN`.
+- Converti les colonnes numériques avec `CAST` (NUMBER, FLOAT)
+- Converti les timestamps Unix en dates lisibles avec `TO_TIMESTAMP`
+- Géré les valeurs nulles avec des filtres `WHERE ... IS NOT NULL`
+- Extrait les champs des fichiers JSON avec la syntaxe `raw_data:champ::STRING`
+
+**Problème rencontré :** Les colonnes `remote_allowed` et `sponsored` contenaient des valeurs `1.0` et `0.0` au lieu de `true`/`false`. Snowflake ne reconnaissait pas ces valeurs comme des booléens. On a réglé ça avec un `CASE WHEN` pour convertir manuellement.
 
 ---
 
 ## Phase 3 : Couche Gold
 
-Création de 5 vues agrégées pour les analyses.
+Pour la couche Gold, on a créé 5 vues SQL qui agrègent les données pour chaque analyse demandée. Ces vues sont directement utilisées par Streamlit pour afficher les graphiques.
 
-**Problème rencontré :** La colonne `company_name` dans job_postings contenait des IDs numériques et non des noms → résolu en joingnant sur `company_id`.
+**Problème rencontré :** En voulant faire la jointure entre les offres d'emploi et les entreprises, on a réalisé que la colonne `company_name` dans job_postings contenait en fait des **IDs numériques** et non des noms d'entreprises. On a donc dû joindre sur `company_id` au lieu du nom.
 
 ---
 
 ## Analyses et Résultats
 
-## Analyses et Résultats
-
 ### 1. Top 10 des titres de postes les plus publiés par industrie
-![top10_titres](screenshots/titres de postes les plus publiés par industrie.png)
+![top10_titres](screenshots/top10_titres.png)
 
-On observe que les postes les plus publiés varient fortement selon l'industrie. Dans l'IT, les postes techniques dominent, tandis que dans d'autres secteurs ce sont des postes commerciaux.
+Les postes les plus publiés varient beaucoup selon l'industrie. Dans l'IT par exemple, ce sont surtout des postes techniques, alors que dans d'autres secteurs ce sont plutôt des postes commerciaux ou managériaux.
 
 ### 2. Top 10 des postes les mieux rémunérés par industrie
-![top10_salaires](screenshots/postes les mieux rémunérés par industrie.png)
+![top10_salaires](screenshots/top10_salaires.png)
 
-Les salaires les plus élevés se trouvent dans les secteurs technologiques et financiers.
+Les salaires les plus élevés se trouvent dans les secteurs technologiques et financiers. Certaines industries comme Fishery n'ont qu'un seul poste avec des données salariales disponibles.
 
 ### 3. Répartition des offres par taille d'entreprise
-![taille_entreprise](screenshots/Répartition des offres par taille d'entreprise.png)
+![taille_entreprise](screenshots/taille_entreprise.png)
 
-Les grandes entreprises (taille 7) publient nettement plus d'offres que les petites.
+Sans surprise, les grandes entreprises (taille 7) publient beaucoup plus d'offres que les petites. La taille est codée de 1 (plus petite) à 7 (plus grande entreprise).
 
 ### 4. Répartition des offres par secteur d'activité
-![secteur](screenshots/Répartition des offres par secteur d'activité.png)
+![secteur](screenshots/secteur_activite.png)
 
-Les secteurs les plus actifs en recrutement sont les ressources humaines et la technologie.
+Les secteurs les plus actifs en recrutement sont les ressources humaines, les textiles et la technologie grand public. Certains secteurs de niche comme la pêche ou l'agriculture ont très peu d'offres.
 
 ### 5. Répartition des offres par type d'emploi
-![type_emploi](screenshots/Répartition des offres par type d'emploi.png)
+![type_emploi](screenshots/type_emploi.png)
 
-Le temps plein (Full-time) domine largement avec plus de 12 000 offres.
+Le temps plein (Full-time) domine largement avec plus de 12 000 offres, ce qui est logique pour LinkedIn qui est surtout utilisé pour des recherches d'emploi classiques. Les stages et le bénévolat sont très peu représentés.
+
 ---
 
 ## Technologies Utilisées
